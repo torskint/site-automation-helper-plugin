@@ -18,6 +18,12 @@
  * seule information à transmettre à l'outil CLI (variable d'environnement
  * `<SLUG>_SAH_API_KEY`, voir automation/config/_schema.md).
  *
+ * v0.12.0 : route /elementor-document/{id} — même principe que /elementor-footer/{id} mais pour
+ * une page normale (post_type "page") plutôt qu'un template de footer. Besoin apparu en
+ * recréant sélectivement des pages issues d'un ancien site (électornova) sur un nouveau projet :
+ * WordPress core ne permet pas d'écrire _elementor_data via /wp/v2/pages (meta non enregistrée
+ * pour la REST par Elementor lui-même).
+ *
  * Mises à jour : ce plugin n'est pas distribué sur wordpress.org — les nouvelles versions sont
  * détectées automatiquement depuis les releases publiques de
  * https://github.com/torskint/site-automation-helper-plugin (dépôt dédié, ne contient QUE le
@@ -33,7 +39,7 @@ if (!defined('ABSPATH')) {
 }
 
 define('SAH_NAMESPACE', 'site-automation/v1');
-define('SAH_PLUGIN_VERSION', '0.11.0');
+define('SAH_PLUGIN_VERSION', '0.12.0');
 define('SAH_UPDATE_REPO', 'torskint/site-automation-helper-plugin');
 define('SAH_PLUGIN_SLUG', plugin_basename(__FILE__));
 
@@ -314,6 +320,18 @@ add_action('rest_api_init', function () {
         'permission_callback' => 'sah_permission_check',
     ]);
 
+    register_rest_route(SAH_NAMESPACE, '/elementor-document/(?P<id>\d+)', [
+        'methods' => 'GET',
+        'callback' => 'sah_get_elementor_document_data',
+        'permission_callback' => 'sah_permission_check',
+    ]);
+
+    register_rest_route(SAH_NAMESPACE, '/elementor-document/(?P<id>\d+)', [
+        'methods' => 'POST',
+        'callback' => 'sah_set_elementor_document_data',
+        'permission_callback' => 'sah_permission_check',
+    ]);
+
     register_rest_route(SAH_NAMESPACE, '/legal-css', [
         'methods' => 'GET',
         'callback' => function () {
@@ -589,6 +607,82 @@ function sah_set_elementor_footer_data(WP_REST_Request $request) {
     }
 
     update_post_meta($id, '_elementor_data', wp_slash(wp_json_encode($data)));
+
+    if (class_exists('\Elementor\Plugin')) {
+        \Elementor\Plugin::instance()->files_manager->clear_cache();
+    }
+
+    return new WP_REST_Response(['ok' => true, 'id' => $id], 200);
+}
+
+/**
+ * Vérifie que l'ID fourni correspond bien à une page normale (post_type "page") — jamais
+ * n'importe quel post — avant de permettre une lecture/écriture de son _elementor_data. Même
+ * garde-fou que sah_get_validated_footer_template(), adapté au post_type "page" plutôt qu'à un
+ * type de template elementor_library précis.
+ */
+function sah_get_validated_page_document($id) {
+    $post = get_post($id);
+    if (!$post || $post->post_type !== 'page') {
+        return new WP_Error('sah_not_found', 'Page introuvable pour cet id.', ['status' => 404]);
+    }
+    return $post;
+}
+
+function sah_get_elementor_document_data(WP_REST_Request $request) {
+    $id = (int) $request['id'];
+    $post = sah_get_validated_page_document($id);
+    if (is_wp_error($post)) {
+        return $post;
+    }
+
+    $raw = get_post_meta($id, '_elementor_data', true);
+    $data = $raw ? json_decode($raw, true) : [];
+    if (!is_array($data)) {
+        $data = [];
+    }
+
+    return new WP_REST_Response([
+        'id' => $id,
+        'title' => $post->post_title,
+        'elementor_data' => $data,
+        'elementor_page_settings' => get_post_meta($id, '_elementor_page_settings', true) ?: null,
+        'elementor_edit_mode' => get_post_meta($id, '_elementor_edit_mode', true) ?: null,
+        'elementor_template_type' => get_post_meta($id, '_elementor_template_type', true) ?: null,
+    ], 200);
+}
+
+/**
+ * Remplace intégralement _elementor_data d'une page normale par le JSON fourni, et pose les
+ * metas complémentaires nécessaires à Elementor pour reconnaître et afficher cette page comme
+ * construite avec le page builder (_elementor_edit_mode, _elementor_template_type,
+ * _elementor_version) — sans quoi Elementor l'ignore et WordPress retombe sur post_content brut.
+ * page_settings est optionnel (tableau associatif de réglages Elementor par page — logo header,
+ * masquage titre/breadcrumb, etc.) : fusionné (merge complémentaire), pas de valeur imposée par
+ * défaut ici, pour rester un simple point d'écriture validé (même philosophie que
+ * sah_set_elementor_footer_data : la fusion/le calcul se fait côté outil appelant).
+ */
+function sah_set_elementor_document_data(WP_REST_Request $request) {
+    $id = (int) $request['id'];
+    $post = sah_get_validated_page_document($id);
+    if (is_wp_error($post)) {
+        return $post;
+    }
+
+    $data = $request->get_param('elementor_data');
+    if (!is_array($data)) {
+        return new WP_Error('sah_invalid_payload', 'Le champ "elementor_data" doit être un tableau JSON.', ['status' => 400]);
+    }
+
+    update_post_meta($id, '_elementor_data', wp_slash(wp_json_encode($data)));
+    update_post_meta($id, '_elementor_edit_mode', 'builder');
+    update_post_meta($id, '_elementor_template_type', 'wp-page');
+    update_post_meta($id, '_elementor_version', defined('ELEMENTOR_VERSION') ? ELEMENTOR_VERSION : '3.11.5');
+
+    $page_settings = $request->get_param('elementor_page_settings');
+    if (is_array($page_settings) && !empty($page_settings)) {
+        update_post_meta($id, '_elementor_page_settings', $page_settings);
+    }
 
     if (class_exists('\Elementor\Plugin')) {
         \Elementor\Plugin::instance()->files_manager->clear_cache();
