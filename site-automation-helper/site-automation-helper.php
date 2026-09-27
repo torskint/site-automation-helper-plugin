@@ -5,12 +5,15 @@
  *              Auto-suffisant : génère sa propre clé API à l'activation et authentifie lui-même
  *              toutes les requêtes REST (cœur WP + ses propres routes) — aucun mot de passe
  *              d'application WordPress à créer séparément.
- * Version: 0.11.0 (authentification par clé API propre au plugin, plus de dépendance aux
- *          Application Passwords ; route /media pour l'upload direct d'images générées côté
- *          outil ; mécanisme de mise à jour auto-hébergé via releases GitHub publiques ; route
- *          /term-meta pour écrire des metas de taxonomie non exposées par les REST natifs des
- *          plugins tiers, ex. l'image de marque de Perfect Brands for WooCommerce)
+ * Version: 0.12.1
  * Update URI: https://github.com/torskint/site-automation-helper-plugin
+ *
+ * Historique résumé : authentification par clé API propre au plugin (plus de dépendance aux
+ * Application Passwords) ; route /media pour l'upload direct d'images générées côté outil ;
+ * mécanisme de mise à jour auto-hébergé via releases GitHub publiques ; route /term-meta pour
+ * écrire des metas de taxonomie non exposées par les REST natifs des plugins tiers (ex. l'image
+ * de marque de Perfect Brands for WooCommerce) ; route /elementor-document/{id} pour écrire
+ * _elementor_data sur une page normale (0.12.0).
  *
  * Installation : Extensions → Ajouter → Téléverser un plugin → choisir
  * site-automation-helper.zip → Installer → Activer. Aller ensuite dans
@@ -23,6 +26,10 @@
  * recréant sélectivement des pages issues d'un ancien site (électornova) sur un nouveau projet :
  * WordPress core ne permet pas d'écrire _elementor_data via /wp/v2/pages (meta non enregistrée
  * pour la REST par Elementor lui-même).
+ * v0.12.1 : correctif — le champ "Version" de l'en-tête du plugin (celui que WordPress affiche
+ * réellement sur la page Extensions) n'avait pas été mis à jour en 0.12.0, seule la constante
+ * PHP interne SAH_PLUGIN_VERSION l'avait été ; la page Extensions continuait donc d'afficher
+ * 0.11.0 malgré le nouveau code installé.
  *
  * Mises à jour : ce plugin n'est pas distribué sur wordpress.org — les nouvelles versions sont
  * détectées automatiquement depuis les releases publiques de
@@ -39,7 +46,7 @@ if (!defined('ABSPATH')) {
 }
 
 define('SAH_NAMESPACE', 'site-automation/v1');
-define('SAH_PLUGIN_VERSION', '0.12.0');
+define('SAH_PLUGIN_VERSION', '0.12.1');
 define('SAH_UPDATE_REPO', 'torskint/site-automation-helper-plugin');
 define('SAH_PLUGIN_SLUG', plugin_basename(__FILE__));
 
