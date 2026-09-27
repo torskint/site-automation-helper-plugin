@@ -5,9 +5,11 @@
  *              Auto-suffisant : génère sa propre clé API à l'activation et authentifie lui-même
  *              toutes les requêtes REST (cœur WP + ses propres routes) — aucun mot de passe
  *              d'application WordPress à créer séparément.
- * Version: 0.10.0 (authentification par clé API propre au plugin, plus de dépendance aux
+ * Version: 0.11.0 (authentification par clé API propre au plugin, plus de dépendance aux
  *          Application Passwords ; route /media pour l'upload direct d'images générées côté
- *          outil ; mécanisme de mise à jour auto-hébergé via releases GitHub publiques)
+ *          outil ; mécanisme de mise à jour auto-hébergé via releases GitHub publiques ; route
+ *          /term-meta pour écrire des metas de taxonomie non exposées par les REST natifs des
+ *          plugins tiers, ex. l'image de marque de Perfect Brands for WooCommerce)
  * Update URI: https://github.com/torskint/site-automation-helper-plugin
  *
  * Installation : Extensions → Ajouter → Téléverser un plugin → choisir
@@ -31,7 +33,7 @@ if (!defined('ABSPATH')) {
 }
 
 define('SAH_NAMESPACE', 'site-automation/v1');
-define('SAH_PLUGIN_VERSION', '0.10.0');
+define('SAH_PLUGIN_VERSION', '0.11.0');
 define('SAH_UPDATE_REPO', 'torskint/site-automation-helper-plugin');
 define('SAH_PLUGIN_SLUG', plugin_basename(__FILE__));
 
@@ -331,6 +333,12 @@ add_action('rest_api_init', function () {
         'callback' => 'sah_upload_media',
         'permission_callback' => 'sah_permission_check',
     ]);
+
+    register_rest_route(SAH_NAMESPACE, '/term-meta', [
+        'methods' => 'POST',
+        'callback' => 'sah_set_term_meta',
+        'permission_callback' => 'sah_permission_check',
+    ]);
 });
 
 /**
@@ -474,6 +482,57 @@ function sah_upload_media(WP_REST_Request $request) {
         'id' => $attachment_id,
         'source_url' => wp_get_attachment_url($attachment_id),
     ], 201);
+}
+
+/**
+ * Certains plugins (ex. Perfect Brands for WooCommerce) stockent des données de terme — image,
+ * bannière — en term meta sans les exposer en écriture sur leur propre REST (leur endpoint
+ * `wc/v3/brands` ne fait que les LIRE en sortie, voir prepare_item_for_response côté plugin).
+ * Ce endpoint générique comble ce trou pour l'automatisation, mais reste volontairement
+ * restreint à une whitelist explicite {taxonomie => clés meta autorisées} : ce n'est jamais un
+ * écrivain de meta arbitraire, seulement un point d'entrée pour les cas déjà identifiés et
+ * documentés ci-dessous. Ajouter une entrée ici à chaque nouveau besoin découvert, jamais
+ * élargir vers un joker.
+ */
+const SAH_TERM_META_WHITELIST = [
+    'pwb-brand' => ['pwb_brand_image', 'pwb_brand_banner', 'pwb_brand_banner_link', 'pwb_brand_banner_description'],
+];
+
+function sah_set_term_meta(WP_REST_Request $request) {
+    $taxonomy = $request->get_param('taxonomy');
+    $term_id = $request->get_param('term_id');
+    $meta = $request->get_param('meta');
+
+    if (!is_string($taxonomy) || !isset(SAH_TERM_META_WHITELIST[$taxonomy])) {
+        return new WP_Error(
+            'sah_invalid_taxonomy',
+            'Taxonomie non prise en charge par cet endpoint : ' . implode(', ', array_keys(SAH_TERM_META_WHITELIST)) . ' uniquement.',
+            ['status' => 400]
+        );
+    }
+    if (!is_numeric($term_id) || !term_exists((int) $term_id, $taxonomy)) {
+        return new WP_Error('sah_invalid_term', 'Terme introuvable pour cette taxonomie.', ['status' => 404]);
+    }
+    if (!is_array($meta) || empty($meta)) {
+        return new WP_Error('sah_invalid_payload', 'Le champ "meta" doit être un objet non vide.', ['status' => 400]);
+    }
+
+    $allowed_keys = SAH_TERM_META_WHITELIST[$taxonomy];
+    $term_id = (int) $term_id;
+    $written = [];
+    foreach ($meta as $key => $value) {
+        if (!in_array($key, $allowed_keys, true)) {
+            return new WP_Error(
+                'sah_invalid_meta_key',
+                "Clé meta '$key' non autorisée pour la taxonomie '$taxonomy' : " . implode(', ', $allowed_keys) . ' uniquement.',
+                ['status' => 400]
+            );
+        }
+        update_term_meta($term_id, $key, is_scalar($value) ? $value : sanitize_text_field((string) $value));
+        $written[$key] = $value;
+    }
+
+    return new WP_REST_Response(['ok' => true, 'taxonomy' => $taxonomy, 'term_id' => $term_id, 'meta' => $written], 200);
 }
 
 /**
